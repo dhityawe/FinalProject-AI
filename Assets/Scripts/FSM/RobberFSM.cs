@@ -64,7 +64,21 @@ public class RobberFSM : MonoBehaviour
     private int currentNodeIndex = 0;
     private Node currentTargetNode;
     private GameObject currentHidingBush = null;
+    // The actual NavMesh target we set when fleeing to a bush (sampled on NavMesh)
+    private Vector3 currentBushNavTarget = Vector3.zero;
     private List<GameObject> policeInRange = new List<GameObject>();
+
+    // helper: remove null/destroyed police entries and return active count
+    private int CleanPoliceList()
+    {
+        if (policeInRange == null || policeInRange.Count == 0) return 0;
+        for (int i = policeInRange.Count - 1; i >= 0; i--)
+        {
+            if (policeInRange[i] == null)
+                policeInRange.RemoveAt(i);
+        }
+        return policeInRange.Count;
+    }
 
     void Start()
     {
@@ -159,10 +173,11 @@ public class RobberFSM : MonoBehaviour
     
     private void UpdateWalkState()
     {
-        if (debugMode) Debug.Log($"[{gameObject.name}] UpdateWalkState() PoliceCount={policeInRange.Count}");
+        int activePolice = CleanPoliceList();
+        if (debugMode) Debug.Log($"[{gameObject.name}] UpdateWalkState() PoliceCount={activePolice}");
 
         // Check if police detected
-        if (policeInRange.Count > 0)
+        if (activePolice > 0)
         {
             if (debugMode) Debug.Log($"[{gameObject.name}] Police detected while walking -> switch to Flee");
             ChangeState(RobberState.Flee);
@@ -205,7 +220,8 @@ public class RobberFSM : MonoBehaviour
     
     private void UpdateFleeState()
     {
-        if (debugMode) Debug.Log($"[{gameObject.name}] UpdateFleeState() CurrentBush={(currentHidingBush!=null?currentHidingBush.name:"null")}");
+        int activePolice = CleanPoliceList();
+        if (debugMode) Debug.Log($"[{gameObject.name}] UpdateFleeState() CurrentBush={(currentHidingBush!=null?currentHidingBush.name:"null")} PoliceCount={activePolice}");
 
         // Find nearest bush if we don't have one yet
         if (currentHidingBush == null)
@@ -216,7 +232,16 @@ public class RobberFSM : MonoBehaviour
             if (currentHidingBush != null)
             {
                 Vector3 bushCenter = currentHidingBush.transform.position;
-                agent.SetDestination(bushCenter);
+                // Try to find a NavMesh point near the bush center so the agent can reach it
+                UnityEngine.AI.NavMeshHit hit;
+                Vector3 navTarget = bushCenter;
+                if (UnityEngine.AI.NavMesh.SamplePosition(bushCenter, out hit, 5f, UnityEngine.AI.NavMesh.AllAreas))
+                {
+                    navTarget = hit.position;
+                    if (debugMode) Debug.Log($"[{gameObject.name}] Sampled NavMesh near bush at {navTarget}");
+                }
+                currentBushNavTarget = navTarget;
+                agent.SetDestination(currentBushNavTarget);
                 
                 if (debugMode)
                 {
@@ -238,11 +263,32 @@ public class RobberFSM : MonoBehaviour
         }
         else
         {
-            // Check if reached bush
-            float distanceToBush = Vector3.Distance(transform.position, currentHidingBush.transform.position);
-            
-            if (debugMode) Debug.Log($"[{gameObject.name}] DistanceToBush={distanceToBush:F2} HideReach={hideReachDistance}");
-            if (distanceToBush < hideReachDistance)
+            // Check if reached bush (prefer agent.remainingDistance, fallback to direct distance to nav target)
+            float directDistToNav = Vector3.Distance(transform.position, currentBushNavTarget);
+            bool arrived = false;
+
+            if (!agent.pathPending)
+            {
+                if (agent.hasPath)
+                {
+                    if (agent.remainingDistance <= agent.stoppingDistance + 0.1f)
+                        arrived = true;
+                }
+                else
+                {
+                    // no path: fallback to direct distance
+                    if (directDistToNav <= hideReachDistance)
+                        arrived = true;
+                }
+            }
+
+            // extra fallback: direct distance check in case agent metrics are unreliable
+            if (!arrived && directDistToNav <= hideReachDistance)
+                arrived = true;
+
+            if (debugMode) Debug.Log($"[{gameObject.name}] DistToNav={directDistToNav:F2} Arrived={arrived} Remaining={agent.remainingDistance:F2}");
+
+            if (arrived)
             {
                 if (debugMode) Debug.Log($"[{gameObject.name}] Reached bush -> switching to Hide state");
                 ChangeState(RobberState.Hide);
@@ -254,10 +300,11 @@ public class RobberFSM : MonoBehaviour
     {
         // Stay hidden in the bush
         agent.isStopped = true;
-        if (debugMode) Debug.Log($"[{gameObject.name}] UpdateHideState() PoliceCount={policeInRange.Count}");
+        int activePolice = CleanPoliceList();
+        if (debugMode) Debug.Log($"[{gameObject.name}] UpdateHideState() PoliceCount={activePolice}");
 
         // Check if police left the area
-        if (policeInRange.Count == 0)
+        if (activePolice == 0)
         {
             if (debugMode)
             {
@@ -265,6 +312,9 @@ public class RobberFSM : MonoBehaviour
             }
             
             currentHidingBush = null;
+            // make sure agent path is cleared and we set a fresh destination when resuming
+            agent.isStopped = false;
+            agent.ResetPath();
             ChangeState(RobberState.Walk);
         }
         else
@@ -315,10 +365,13 @@ public class RobberFSM : MonoBehaviour
                 agent.isStopped = false;
                 agent.speed = fleeSpeed;
                 currentHidingBush = null;
+                currentBushNavTarget = Vector3.zero;
                 break;
                 
             case RobberState.Hide:
                 agent.isStopped = true;
+                // clear nav target while hidden
+                currentBushNavTarget = Vector3.zero;
                 break;
         }
     }

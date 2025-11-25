@@ -799,7 +799,7 @@ NavMeshAgent:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 495403447699483738}
   m_Enabled: 1
-  m_AgentTypeID: -1372625422
+  m_AgentTypeID: 0
   m_Radius: 0.1
   m_Speed: 3.5
   m_Acceleration: 8
@@ -825,8 +825,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 5b3284941e5fe3e409710693890e0b73, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  minWanderDistance: 10
-  maxWanderDistance: 30
+  minWanderDistance: 5
+  maxWanderDistance: 15
   waitTimeAtDestination: 2
   stoppingDistance: 1
   enableObstacleDetection: 1
